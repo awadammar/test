@@ -1,0 +1,152 @@
+name: Unit Tests
+
+# This workflow will be triggered by our scheduler via API
+on:
+  workflow_dispatch:
+    inputs:
+      ios:
+        description: 'Run iOS tests'
+        required: true
+        type: boolean
+        default: true
+      macos:
+        description: 'Run macOS tests'
+        required: true
+        type: boolean
+        default: true
+      windows:
+        description: 'Run Windows tests'
+        required: true
+        type: boolean
+        default: true
+      architecture:
+        description: 'Target architectures (comma-separated)'
+        required: true
+        type: string
+        default: 'arm64,X64'
+      configuration:
+        description: 'Build configuration (comma-separated)'
+        required: true
+        type: string
+        default: 'Debug,Release'
+      clean:
+        description: 'Clean build'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      architectures: ${{ steps.parse-matrix.outputs.architectures }}
+      configurations: ${{ steps.parse-matrix.outputs.configurations }}
+    steps:
+      - name: Parse matrix inputs
+        id: parse-matrix
+        run: |
+          echo "architectures=$(echo '${{ inputs.architecture }}' | jq -R 'split(",")')" >> $GITHUB_OUTPUT
+          echo "configurations=$(echo '${{ inputs.configuration }}' | jq -R 'split(",")')" >> $GITHUB_OUTPUT
+
+  ios-tests:
+    needs: prepare
+    if: ${{ inputs.ios == 'true' }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        architecture: ${{ fromJson(needs.prepare.outputs.architectures) }}
+        configuration: ${{ fromJson(needs.prepare.outputs.configurations) }}
+    steps:
+      - uses: actions/checkout@v3
+        
+      - name: Clean build if requested
+        if: ${{ inputs.clean == 'true' }}
+        run: |
+          xcodebuild clean
+          
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+          
+      - name: Run iOS Unit Tests
+        run: |
+          xcodebuild test \
+            -scheme YourScheme \
+            -destination "platform=iOS Simulator,name=iPhone 14,arch=${{ matrix.architecture }}" \
+            -configuration ${{ matrix.configuration }}
+
+  macos-tests:
+    needs: prepare
+    if: ${{ inputs.macos == 'true' }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        architecture: ${{ fromJson(needs.prepare.outputs.architectures) }}
+        configuration: ${{ fromJson(needs.prepare.outputs.configurations) }}
+    steps:
+      - uses: actions/checkout@v3
+        
+      - name: Clean build if requested
+        if: ${{ inputs.clean == 'true' }}
+        run: |
+          xcodebuild clean
+          
+      - name: Run macOS Unit Tests
+        run: |
+          xcodebuild test \
+            -scheme YourScheme \
+            -destination "platform=macOS,arch=${{ matrix.architecture }}" \
+            -configuration ${{ matrix.configuration }}
+
+  windows-tests:
+    needs: prepare
+    if: ${{ inputs.windows == 'true' }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        architecture: ${{ fromJson(needs.prepare.outputs.architectures) }}
+        configuration: ${{ fromJson(needs.prepare.outputs.configurations) }}
+    steps:
+      - uses: actions/checkout@v3
+        
+      - name: Clean build if requested
+        if: ${{ inputs.clean == 'true' }}
+        run: |
+          dotnet clean
+          
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '7.0.x'
+          
+      - name: Run Windows Unit Tests
+        run: |
+          dotnet test --configuration ${{ matrix.configuration }} --arch ${{ matrix.architecture }}
+
+  notify:
+    needs: [ios-tests, macos-tests, windows-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check test results
+        if: contains(needs.*.result, 'failure')
+        run: exit 1
+        
+      - name: Notify on failure
+        if: failure()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: 'your-channel-id'
+          slack-message: "❌ Unit tests failed on ${{ github.ref_name }} branch!"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          
+      - name: Notify on success
+        if: success()
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          channel-id: 'your-channel-id'
+          slack-message: "✅ Unit tests passed on ${{ github.ref_name }} branch!"
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
